@@ -1,0 +1,8 @@
+{
+  "session_id": "abc123",
+  "transcript_path": "/Users/x/.claude/projects/-Users-x-acme/abc123.jsonl",
+  "cwd": "/Users/x/projects/acme",
+  "hook_event_name": "Stop",
+  "permission_mode": "default",
+  "last_assistant_message": "He terminado la refactorización del módulo de reservas. He terminado la refactorización del módulo de reservas. He terminado la refactorización del módulo de reservas. He terminado la refactorización del módulo de reservas. He terminado la refactorización del módulo de reservas. He terminado la refactorización del módulo de reservas. He terminado la refactorización del módulo de reservas. He terminado la refactorización del módulo de reservas. "
+}

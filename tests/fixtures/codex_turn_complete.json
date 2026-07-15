@@ -1,0 +1,10 @@
+{
+  "type": "agent-turn-complete",
+  "thread-id": "thread-42",
+  "turn-id": "turn-7",
+  "cwd": "/Users/x/projects/acme",
+  "input-messages": [
+    "arregla los tests"
+  ],
+  "last-assistant-message": "Listo: he corregido los tests."
+}
