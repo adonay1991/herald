@@ -1,4 +1,12 @@
-# herald
+<p align="center">
+  <img src="assets/banner.svg" alt="herald — agent- and terminal-agnostic notification dispatcher: a megaphone broadcasting notification cards; attention delivered, turn-complete delivered, and one suppressed because the terminal is focused" width="100%">
+</p>
+
+<p align="center">
+  <a href="docs/CONTRACT.md">agent contract</a> ·
+  <a href="docs/SINKS.md">terminal contract</a> ·
+  <a href="LICENSE">MIT</a>
+</p>
 
 **Agent- and terminal-agnostic notification dispatcher for AI coding agents.**
 
