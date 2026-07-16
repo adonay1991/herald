@@ -1,23 +1,23 @@
 //! Platform-specific effects, kept out of the pure detection/routing layers.
-//! macOS is complete; Linux is a defined interface with a stub implementation
-//! (see docs/CONTRACT.md for the intended notify-send mapping).
+//! Both platform modules are plain Command+string code, so they compile on
+//! every OS and the branch is chosen with runtime-const `cfg!` — that way a
+//! macOS build still type-checks the Linux path and vice versa.
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(not(target_os = "macos"))]
-mod other;
+pub mod linux;
+pub mod macos;
 
 use crate::context::Context;
 
-/// Is the terminal app that owns this process currently frontmost?
+/// Is the terminal that owns this process currently focused?
 /// `None` means "could not determine" — routing treats that as not-frontmost,
 /// because notifying twice is better than losing an actionable alert.
 pub fn terminal_is_frontmost(ctx: &Context) -> Option<bool> {
-    let bundle = ctx.terminal_bundle_id.as_deref()?;
-    imp_frontmost(bundle)
+    if cfg!(target_os = "macos") {
+        let bundle = ctx.terminal_bundle_id.as_deref()?;
+        macos::frontmost(bundle)
+    } else if cfg!(target_os = "linux") {
+        linux::frontmost()
+    } else {
+        None
+    }
 }
-
-#[cfg(target_os = "macos")]
-use macos::frontmost as imp_frontmost;
-#[cfg(not(target_os = "macos"))]
-use other::frontmost as imp_frontmost;

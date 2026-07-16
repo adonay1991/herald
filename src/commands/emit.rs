@@ -14,7 +14,8 @@ pub fn run(args: EmitArgs, cfg: &Config, dry_run: bool) -> Result<()> {
         std::io::stdin()
             .read_to_string(&mut buf)
             .context("reading event JSON from stdin")?;
-        serde_json::from_str::<Event>(&buf).context("stdin is not a canonical Event (docs/CONTRACT.md)")?
+        serde_json::from_str::<Event>(&buf)
+            .context("stdin is not a canonical Event (docs/CONTRACT.md)")?
     } else {
         let (Some(source), Some(kind), Some(body)) = (args.source, args.kind, args.body) else {
             bail!("--source, --kind and --body are required unless --json is used");

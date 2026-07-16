@@ -36,6 +36,10 @@ pub struct Context {
     pub terminal_bundle_id: Option<String>,
     /// No terminal app and no controlling tty: launchd jobs, crons, CI.
     pub headless: bool,
+    /// Inside tmux the terminal-app focus check lies (the app may be
+    /// frontmost while the user sits in another tmux window), so focus is
+    /// treated as unknown and herald errs on the side of notifying.
+    pub tmux: bool,
 }
 
 /// Most specific harness first: a pane inside herdr may still carry
@@ -45,7 +49,10 @@ pub fn detect(env: &HashMap<String, String>, has_tty: bool) -> Context {
         Harness::Herdr
     } else if env.get("CMUX_SURFACE_ID").is_some_and(|v| !v.is_empty()) {
         Harness::Cmux
-    } else if env.get("ORCA_AGENT_HOOK_PORT").is_some_and(|v| !v.is_empty()) {
+    } else if env
+        .get("ORCA_AGENT_HOOK_PORT")
+        .is_some_and(|v| !v.is_empty())
+    {
         Harness::Orca
     } else {
         Harness::Plain
@@ -56,11 +63,13 @@ pub fn detect(env: &HashMap<String, String>, has_tty: bool) -> Context {
         .filter(|v| !v.is_empty())
         .cloned();
     let headless = terminal_bundle_id.is_none() && !has_tty;
+    let tmux = env.get("TMUX").is_some_and(|v| !v.is_empty());
 
     Context {
         harness,
         terminal_bundle_id,
         headless,
+        tmux,
     }
 }
 
@@ -86,7 +95,10 @@ mod tests {
     #[test]
     fn herdr_wins_over_terminal_vars() {
         let ctx = detect(
-            &env(&[("HERDR_ENV", "1"), ("__CFBundleIdentifier", "com.apple.Terminal")]),
+            &env(&[
+                ("HERDR_ENV", "1"),
+                ("__CFBundleIdentifier", "com.apple.Terminal"),
+            ]),
             true,
         );
         assert_eq!(ctx.harness, Harness::Herdr);
@@ -113,12 +125,26 @@ mod tests {
         assert!(detect(&env(&[]), false).headless);
         assert!(!detect(&env(&[]), true).headless);
         assert!(
-            !detect(&env(&[("__CFBundleIdentifier", "com.googlecode.iterm2")]), false).headless
+            !detect(
+                &env(&[("__CFBundleIdentifier", "com.googlecode.iterm2")]),
+                false
+            )
+            .headless
         );
     }
 
     #[test]
     fn herdr_env_must_be_exactly_one() {
-        assert_eq!(detect(&env(&[("HERDR_ENV", "0")]), true).harness, Harness::Plain);
+        assert_eq!(
+            detect(&env(&[("HERDR_ENV", "0")]), true).harness,
+            Harness::Plain
+        );
+    }
+
+    #[test]
+    fn tmux_detected_from_env() {
+        assert!(detect(&env(&[("TMUX", "/tmp/tmux-501/default,123,0")]), true).tmux);
+        assert!(!detect(&env(&[]), true).tmux);
+        assert!(!detect(&env(&[("TMUX", "")]), true).tmux);
     }
 }

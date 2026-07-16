@@ -45,6 +45,7 @@ impl Sink for CmuxSink {
                 "--body".into(),
                 ev.body.clone(),
             ],
+            env: vec![],
         }]
     }
 }

@@ -33,7 +33,10 @@ pub fn parse(json: &str, matcher: Option<&str>) -> Result<Option<Event>> {
         "SessionEnd" => (EventKind::SessionEnd, String::new()),
         "PermissionRequest" => {
             let tool = v["tool_name"].as_str().unwrap_or("a tool");
-            (EventKind::Attention, format!("Permission requested: {tool}"))
+            (
+                EventKind::Attention,
+                format!("Permission requested: {tool}"),
+            )
         }
         _ => return Ok(None),
     };
@@ -71,7 +74,9 @@ mod tests {
 
     #[test]
     fn agent_completed_matcher_maps_to_turn_complete() {
-        let ev = parse(NOTIFICATION, Some("agent_completed")).unwrap().unwrap();
+        let ev = parse(NOTIFICATION, Some("agent_completed"))
+            .unwrap()
+            .unwrap();
         assert_eq!(ev.kind, EventKind::TurnComplete);
     }
 

@@ -3,7 +3,11 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "herald", version, about = "Agent- and terminal-agnostic notification dispatcher")]
+#[command(
+    name = "herald",
+    version,
+    about = "Agent- and terminal-agnostic notification dispatcher"
+)]
 pub struct Cli {
     /// Alternative config file (default: ~/.config/herald/config.toml)
     #[arg(long, global = true)]
@@ -28,6 +32,9 @@ pub enum Cmd {
         /// Installs ALONGSIDE any existing presenter; never replaces one.
         #[arg(long)]
         install_app: bool,
+        /// Emit the report as JSON (for scripting/monitoring)
+        #[arg(long)]
+        json: bool,
     },
     /// Send a synthetic event through the real pipeline
     Test(TestArgs),
@@ -48,9 +55,7 @@ pub enum HookAgent {
         legacy_event: Option<String>,
     },
     /// Codex CLI: payload JSON as the final argv element
-    Codex {
-        payload: Option<String>,
-    },
+    Codex { payload: Option<String> },
     /// Gemini CLI: hook JSON on stdin (experimental)
     Gemini {
         #[arg(long)]
@@ -100,4 +105,7 @@ pub struct LogArgs {
     /// Print raw JSONL instead of the compact rendering
     #[arg(long)]
     pub raw: bool,
+    /// Aggregate counts by decision, kind, source and sink instead of lines
+    #[arg(long, conflicts_with_all = ["follow", "raw"])]
+    pub stats: bool,
 }

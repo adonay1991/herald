@@ -1,5 +1,7 @@
 [package]
-name = "herald"
+# crates.io package name ("herald" is taken); the binary and library keep
+# the short name via the [lib]/[[bin]] sections below.
+name = "herald-notify"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
@@ -19,15 +21,24 @@ include = [
     "Cargo.toml",
     "Cargo.lock",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
 ]
+
+[lib]
+name = "herald"
+path = "src/lib.rs"
+
+[[bin]]
+name = "herald"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.99"
 clap = { version = "4.5.48", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-time = { version = "0.3.44", features = ["formatting", "macros", "parsing"] }
+time = { version = "0.3.44", features = ["formatting", "macros", "parsing", "local-offset"] }
 toml = "0.8"
 
 [dev-dependencies]

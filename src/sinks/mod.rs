@@ -5,6 +5,7 @@
 pub mod cmux;
 pub mod exec;
 pub mod herdr;
+pub mod osc;
 pub mod system;
 
 use crate::context::Context;
@@ -20,11 +21,24 @@ pub const SPAWN_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case", tag = "action")]
 pub enum Action {
-    Spawn { argv: Vec<String> },
-    SpawnStdin { argv: Vec<String>, stdin: String },
+    Spawn {
+        argv: Vec<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        env: Vec<(String, String)>,
+    },
+    SpawnStdin {
+        argv: Vec<String>,
+        stdin: String,
+    },
+    /// Write an escape sequence to the controlling terminal (OSC sink).
+    WriteTty {
+        data: String,
+    },
     /// Try in order, stop at the first success. This is the notify-native.sh
     /// cascade generalized: native app → terminal-notifier → osascript.
-    Cascade { steps: Vec<Action> },
+    Cascade {
+        steps: Vec<Action>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -64,13 +78,26 @@ pub fn execute(actions: &[Action]) -> Outcome {
             }
         }
     }
-    Outcome { ok: all_ok, backend, detail }
+    Outcome {
+        ok: all_ok,
+        backend,
+        detail,
+    }
 }
 
 fn run_action(action: &Action) -> Result<String, String> {
     match action {
-        Action::Spawn { argv } => run_process(argv, None),
-        Action::SpawnStdin { argv, stdin } => run_process(argv, Some(stdin)),
+        Action::Spawn { argv, env } => run_process(argv, None, env),
+        Action::SpawnStdin { argv, stdin } => run_process(argv, Some(stdin), &[]),
+        Action::WriteTty { data } => {
+            let mut tty = std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/tty")
+                .map_err(|e| format!("tty: {e}"))?;
+            tty.write_all(data.as_bytes())
+                .map_err(|e| format!("tty: {e}"))?;
+            Ok("tty".to_string())
+        }
         Action::Cascade { steps } => {
             let mut last_err = "empty cascade".to_string();
             for step in steps {
@@ -84,15 +111,26 @@ fn run_action(action: &Action) -> Result<String, String> {
     }
 }
 
-fn run_process(argv: &[String], stdin: Option<&str>) -> Result<String, String> {
+fn run_process(
+    argv: &[String],
+    stdin: Option<&str>,
+    env: &[(String, String)],
+) -> Result<String, String> {
     let (program, args) = argv.split_first().ok_or("empty argv")?;
     let label = basename(program);
     let mut cmd = Command::new(program);
     cmd.args(args)
-        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut child = cmd.spawn().map_err(|e| format!("{label}: spawn failed: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("{label}: spawn failed: {e}"))?;
     if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
         // Best-effort: a sink that closes stdin early must not fail the write.
         let _ = pipe.write_all(input.as_bytes());
@@ -123,13 +161,20 @@ fn basename(path: &str) -> String {
 mod tests {
     use super::*;
 
+    fn spawn(argv: &[&str]) -> Action {
+        Action::Spawn {
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            env: vec![],
+        }
+    }
+
     #[test]
     fn cascade_stops_at_first_success() {
         let actions = [Action::Cascade {
             steps: vec![
-                Action::Spawn { argv: vec!["/nonexistent/bin".into()] },
-                Action::Spawn { argv: vec!["true".into()] },
-                Action::Spawn { argv: vec!["/also/nonexistent".into()] },
+                spawn(&["/nonexistent/bin"]),
+                spawn(&["true"]),
+                spawn(&["/also/nonexistent"]),
             ],
         }];
         let out = execute(&actions);
@@ -140,11 +185,24 @@ mod tests {
     #[test]
     fn cascade_reports_last_error_when_all_fail() {
         let actions = [Action::Cascade {
-            steps: vec![Action::Spawn { argv: vec!["false".into()] }],
+            steps: vec![spawn(&["false"])],
         }];
         let out = execute(&actions);
         assert!(!out.ok);
         assert!(out.detail.unwrap().contains("false"));
+    }
+
+    #[test]
+    fn spawn_env_reaches_child() {
+        let out = execute(&[Action::Spawn {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "test \"$HERALD_TEST_VAR\" = yes".into(),
+            ],
+            env: vec![("HERALD_TEST_VAR".into(), "yes".into())],
+        }]);
+        assert!(out.ok);
     }
 
     #[test]

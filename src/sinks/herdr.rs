@@ -54,30 +54,32 @@ impl Sink for HerdrSink {
                 "--sound".into(),
                 sound.into(),
             ],
+            env: vec![],
         }];
-        if self.cfg.report_state {
-            if let Ok(pane_id) = std::env::var("HERDR_PANE_ID") {
-                let state = match ev.urgency() {
-                    Urgency::Critical => "blocked",
-                    _ => "idle",
-                };
-                actions.push(Action::Spawn {
-                    argv: vec![
-                        "herdr".into(),
-                        "pane".into(),
-                        "report-agent".into(),
-                        pane_id,
-                        "--source".into(),
-                        "herald".into(),
-                        "--agent".into(),
-                        ev.source.clone(),
-                        "--state".into(),
-                        state.into(),
-                        "--message".into(),
-                        ev.body.clone(),
-                    ],
-                });
-            }
+        if self.cfg.report_state
+            && let Ok(pane_id) = std::env::var("HERDR_PANE_ID")
+        {
+            let state = match ev.urgency() {
+                Urgency::Critical => "blocked",
+                _ => "idle",
+            };
+            actions.push(Action::Spawn {
+                argv: vec![
+                    "herdr".into(),
+                    "pane".into(),
+                    "report-agent".into(),
+                    pane_id,
+                    "--source".into(),
+                    "herald".into(),
+                    "--agent".into(),
+                    ev.source.clone(),
+                    "--state".into(),
+                    state.into(),
+                    "--message".into(),
+                    ev.body.clone(),
+                ],
+                env: vec![],
+            });
         }
         actions
     }
@@ -94,16 +96,22 @@ mod tests {
             harness: Harness::Herdr,
             terminal_bundle_id: None,
             headless: false,
+            tmux: false,
         }
     }
 
     #[test]
     fn plan_uses_notification_show_with_urgency_sound() {
-        let sink = HerdrSink::new(HerdrConfig { enabled: true, report_state: false });
+        let sink = HerdrSink::new(HerdrConfig {
+            enabled: true,
+            report_state: false,
+        });
         let ev = Event::new("claude", EventKind::Attention, "permission needed");
         let actions = sink.plan(&ev, &ctx());
         assert_eq!(actions.len(), 1);
-        let Action::Spawn { argv } = &actions[0] else { panic!() };
+        let Action::Spawn { argv, .. } = &actions[0] else {
+            panic!()
+        };
         assert_eq!(&argv[..3], &["herdr", "notification", "show"]);
         assert!(argv.contains(&"request".to_string()));
     }

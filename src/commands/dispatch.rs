@@ -1,6 +1,6 @@
-//! Shared dispatch path: context → routing → execution → logbook.
-//! Every entry point (hook, emit, test) funnels through here so behavior,
-//! --dry-run and logging stay identical.
+//! Shared dispatch path: context → routing → burst check → execution →
+//! logbook. Every entry point (hook, emit, test) funnels through here so
+//! behavior, --dry-run and logging stay identical.
 
 use crate::config::{Config, Policy};
 use crate::context::{self, Harness};
@@ -11,6 +11,7 @@ use crate::sinks::{self, Outcome};
 use crate::{config, platform};
 use anyhow::Result;
 use serde::Serialize;
+use time::OffsetDateTime;
 
 #[derive(Serialize)]
 pub struct Report {
@@ -30,9 +31,12 @@ pub fn dispatch_filtered(
 ) -> Result<Report> {
     let ctx = context::current();
 
-    // The focus probe shells out twice; only pay for it when it can matter.
+    // The focus probe shells out; only pay for it when it can matter.
+    // Inside tmux the terminal-app answer lies (the app can be frontmost
+    // while the user sits in another tmux window) → treat as unknown.
     let needs_focus = ctx.harness == Harness::Plain
         && !ctx.headless
+        && !ctx.tmux
         && cfg.policy(ev.kind, ev.urgency()) == Policy::Unfocused;
     let frontmost = if needs_focus {
         platform::terminal_is_frontmost(&ctx)
@@ -40,7 +44,7 @@ pub fn dispatch_filtered(
         None
     };
 
-    let mut plan = routing::plan(&ev, &ctx, cfg, frontmost);
+    let mut plan = routing::plan(&ev, &ctx, cfg, frontmost, minute_of_day());
     if let Some(name) = only_sink {
         plan.deliveries.retain(|d| d.sink == name);
     }
@@ -49,8 +53,22 @@ pub fn dispatch_filtered(
         print_plan(&ev, &ctx, &plan, frontmost)?;
         return Ok(Report {
             decision: plan.decision,
-            deliveries: plan.deliveries.iter().map(|d| (d.sink.clone(), true, None)).collect(),
+            deliveries: plan
+                .deliveries
+                .iter()
+                .map(|d| (d.sink.clone(), true, None))
+                .collect(),
         });
+    }
+
+    // Burst coalescing: an identical (source, kind) delivered inside the
+    // window means fan-outs and parallel sessions produce one banner, not N.
+    let log_path = config::log_path();
+    if plan.decision == Decision::Deliver && is_burst_duplicate(&ev, cfg, &log_path) {
+        plan = RoutePlan {
+            decision: Decision::SuppressedBurst,
+            deliveries: vec![],
+        };
     }
 
     let outcomes: Vec<(String, Outcome)> = plan
@@ -59,7 +77,7 @@ pub fn dispatch_filtered(
         .map(|d| (d.sink.clone(), sinks::execute(&d.actions)))
         .collect();
 
-    if let Err(err) = logbook::append(&config::log_path(), &ev, &ctx, &plan, &outcomes) {
+    if let Err(err) = logbook::append(&log_path, &ev, &ctx, &plan, &outcomes) {
         eprintln!("herald: could not write log: {err:#}");
     }
 
@@ -70,6 +88,38 @@ pub fn dispatch_filtered(
             .map(|(sink, o)| (sink, o.ok, o.backend))
             .collect(),
     })
+}
+
+/// Local minutes since midnight; UTC fallback when the local offset is
+/// unavailable (threaded contexts).
+fn minute_of_day() -> u16 {
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    now.hour() as u16 * 60 + now.minute() as u16
+}
+
+fn is_burst_duplicate(ev: &Event, cfg: &Config, log_path: &std::path::Path) -> bool {
+    let window_ms = cfg.burst_window_ms();
+    if window_ms == 0 {
+        return false;
+    }
+    let Some(last) = logbook::last_entry(log_path) else {
+        return false;
+    };
+    if last["decision"] != "deliver" {
+        return false;
+    }
+    if last["source"] != ev.source.as_str() {
+        return false;
+    }
+    let kind = serde_json::to_value(ev.kind).unwrap_or_default();
+    if last["kind"] != kind {
+        return false;
+    }
+    let Some(ts) = logbook::entry_ts(&last) else {
+        return false;
+    };
+    let age = OffsetDateTime::now_utc() - ts;
+    age >= time::Duration::ZERO && age < time::Duration::milliseconds(window_ms as i64)
 }
 
 fn print_plan(
@@ -85,6 +135,7 @@ fn print_plan(
         resolved_title: String,
         harness: &'static str,
         headless: bool,
+        tmux: bool,
         frontmost: Option<bool>,
         plan: &'a RoutePlan,
     }
@@ -94,6 +145,7 @@ fn print_plan(
         resolved_title: ev.resolved_title(),
         harness: ctx.harness.name(),
         headless: ctx.headless,
+        tmux: ctx.tmux,
         frontmost,
         plan,
     };
@@ -119,6 +171,10 @@ impl Report {
             Decision::SuppressedPolicy => "suppressed (policy: log only)".into(),
             Decision::SuppressedFocus => "suppressed (terminal is frontmost)".into(),
             Decision::SuppressedHarness => "suppressed (harness paints state)".into(),
+            Decision::SuppressedQuiet => "suppressed (quiet hours)".into(),
+            Decision::SuppressedBurst => {
+                "suppressed (burst: identical event just delivered)".into()
+            }
         }
     }
 }

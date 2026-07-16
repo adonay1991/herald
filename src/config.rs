@@ -46,6 +46,12 @@ pub struct Routing {
     pub session_end: Option<Policy>,
     pub error: Option<Policy>,
     pub info: Option<Policy>,
+    /// Coalesce identical (source, kind) deliveries inside this window.
+    /// Default 2000 ms; 0 disables.
+    pub burst_window_ms: Option<u64>,
+    /// "HH:MM-HH:MM" local time; inside the window everything below
+    /// critical is log-only. Wraps midnight ("23:00-08:00").
+    pub quiet_hours: Option<String>,
 }
 
 impl Routing {
@@ -68,6 +74,54 @@ impl Config {
             .override_for(kind)
             .unwrap_or_else(|| urgency.default_policy())
     }
+
+    pub fn burst_window_ms(&self) -> u64 {
+        self.routing.burst_window_ms.unwrap_or(2000)
+    }
+
+    /// Parsed quiet-hours window; None when absent or malformed
+    /// (a malformed window must never make herald drop actionable alerts).
+    pub fn quiet_hours(&self) -> Option<QuietHours> {
+        QuietHours::parse(self.routing.quiet_hours.as_deref()?)
+    }
+}
+
+/// Minutes-of-day window, possibly wrapping midnight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuietHours {
+    start: u16,
+    end: u16,
+}
+
+impl QuietHours {
+    pub fn parse(text: &str) -> Option<Self> {
+        let (a, b) = text.split_once('-')?;
+        let start = parse_hhmm(a.trim())?;
+        let end = parse_hhmm(b.trim())?;
+        if start == end {
+            return None; // zero-length window = disabled
+        }
+        Some(QuietHours { start, end })
+    }
+
+    pub fn contains(&self, minute_of_day: u16) -> bool {
+        if self.start < self.end {
+            minute_of_day >= self.start && minute_of_day < self.end
+        } else {
+            // wraps midnight
+            minute_of_day >= self.start || minute_of_day < self.end
+        }
+    }
+}
+
+fn parse_hhmm(text: &str) -> Option<u16> {
+    let (h, m) = text.split_once(':')?;
+    let h: u16 = h.parse().ok()?;
+    let m: u16 = m.parse().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -80,6 +134,8 @@ pub struct Sinks {
     #[serde(default)]
     pub cmux: CmuxSink,
     #[serde(default)]
+    pub osc: OscSink,
+    #[serde(default)]
     pub exec: Vec<ExecSink>,
 }
 
@@ -89,6 +145,18 @@ pub struct MacosNative {
     /// Path to the .app bundle whose Contents/MacOS binary presents banners.
     /// Default resolution: ~/Applications/Herald.app, else ~/Applications/ClaudeNotify.app.
     pub app_path: Option<PathBuf>,
+    /// Per-urgency sound overrides (macOS system sound names).
+    /// Defaults: critical = Submarine, normal = Glass, low = silent.
+    #[serde(default)]
+    pub sounds: Sounds,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Sounds {
+    pub critical: Option<String>,
+    pub normal: Option<String>,
+    pub low: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -102,7 +170,10 @@ pub struct HerdrSink {
 
 impl Default for HerdrSink {
     fn default() -> Self {
-        HerdrSink { enabled: true, report_state: false }
+        HerdrSink {
+            enabled: true,
+            report_state: false,
+        }
     }
 }
 
@@ -116,6 +187,31 @@ impl Default for CmuxSink {
     fn default() -> Self {
         CmuxSink { enabled: true }
     }
+}
+
+/// In-terminal notifications via OSC escape sequences written to /dev/tty.
+/// Opt-in: the terminal decides presentation and focus handling, which makes
+/// this the most portable sink — but only for terminals that support it
+/// (kitty, Ghostty, iTerm2, WezTerm, ...).
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct OscSink {
+    pub enabled: bool,
+    #[serde(default)]
+    pub protocol: OscProtocol,
+    /// Treat the terminal as owning the pane: suppress the system banner.
+    #[serde(default)]
+    pub exclusive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum OscProtocol {
+    /// OSC 9 — broadest support (iTerm2, WezTerm, Ghostty, Windows Terminal).
+    #[default]
+    Osc9,
+    /// OSC 777 ;notify — urxvt lineage (Ghostty, Warp).
+    Osc777,
 }
 
 /// Third-party terminal integration: when `when_env` is present in the
@@ -179,17 +275,30 @@ mod tests {
     #[test]
     fn zero_config_policies() {
         let cfg = Config::default();
-        assert_eq!(cfg.policy(EventKind::Attention, Urgency::Critical), Policy::Always);
-        assert_eq!(cfg.policy(EventKind::TurnComplete, Urgency::Normal), Policy::Unfocused);
+        assert_eq!(
+            cfg.policy(EventKind::Attention, Urgency::Critical),
+            Policy::Always
+        );
+        assert_eq!(
+            cfg.policy(EventKind::TurnComplete, Urgency::Normal),
+            Policy::Unfocused
+        );
         assert_eq!(cfg.policy(EventKind::Info, Urgency::Low), Policy::Never);
+        assert_eq!(cfg.burst_window_ms(), 2000);
+        assert!(cfg.quiet_hours().is_none());
     }
 
     #[test]
     fn kind_override_beats_urgency_default() {
         let cfg: Config = toml::from_str("[routing]\nturn-complete = \"never\"\n").unwrap();
-        assert_eq!(cfg.policy(EventKind::TurnComplete, Urgency::Normal), Policy::Never);
-        // urgency override still applies to non-overridden kinds
-        assert_eq!(cfg.policy(EventKind::Info, Urgency::Critical), Policy::Always);
+        assert_eq!(
+            cfg.policy(EventKind::TurnComplete, Urgency::Normal),
+            Policy::Never
+        );
+        assert_eq!(
+            cfg.policy(EventKind::Info, Urgency::Critical),
+            Policy::Always
+        );
     }
 
     #[test]
@@ -197,9 +306,12 @@ mod tests {
         let text = r#"
 [routing]
 attention = "always"
+burst-window-ms = 0
+quiet-hours = "23:00-08:00"
 
 [sinks.macos_native]
 app_path = "/Users/x/Applications/ClaudeNotify.app"
+sounds = { critical = "Sosumi", normal = "Pop" }
 
 [sinks.herdr]
 enabled = true
@@ -207,6 +319,11 @@ report_state = false
 
 [sinks.cmux]
 enabled = false
+
+[sinks.osc]
+enabled = true
+protocol = "osc777"
+exclusive = true
 
 [[sinks.exec]]
 name = "myterm"
@@ -219,10 +336,50 @@ exclusive = true
         assert!(!cfg.sinks.cmux.enabled);
         assert_eq!(cfg.sinks.exec.len(), 1);
         assert!(cfg.sinks.exec[0].exclusive);
+        assert_eq!(cfg.burst_window_ms(), 0);
+        assert!(cfg.quiet_hours().is_some());
+        assert!(cfg.sinks.osc.enabled);
+        assert_eq!(cfg.sinks.osc.protocol, OscProtocol::Osc777);
+        assert_eq!(
+            cfg.sinks.macos_native.sounds.critical.as_deref(),
+            Some("Sosumi")
+        );
     }
 
     #[test]
     fn unknown_keys_rejected() {
         assert!(toml::from_str::<Config>("[general]\nfoo = 1\n").is_err());
+    }
+
+    #[test]
+    fn quiet_hours_plain_window() {
+        let q = QuietHours::parse("09:30-17:00").unwrap();
+        assert!(q.contains(9 * 60 + 30));
+        assert!(q.contains(12 * 60));
+        assert!(!q.contains(17 * 60));
+        assert!(!q.contains(8 * 60));
+    }
+
+    #[test]
+    fn quiet_hours_wraps_midnight() {
+        let q = QuietHours::parse("23:00-08:00").unwrap();
+        assert!(q.contains(23 * 60 + 30));
+        assert!(q.contains(2 * 60));
+        assert!(!q.contains(12 * 60));
+        assert!(!q.contains(8 * 60));
+    }
+
+    #[test]
+    fn quiet_hours_rejects_malformed() {
+        for bad in [
+            "",
+            "23-08",
+            "25:00-08:00",
+            "23:00-08:61",
+            "08:00-08:00",
+            "aa:bb-cc:dd",
+        ] {
+            assert!(QuietHours::parse(bad).is_none(), "{bad}");
+        }
     }
 }

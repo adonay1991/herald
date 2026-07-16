@@ -3,8 +3,13 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/adonay1991/herald/actions/workflows/ci.yml"><img src="https://github.com/adonay1991/herald/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
+<p align="center">
   <a href="docs/CONTRACT.md">agent contract</a> ·
   <a href="docs/SINKS.md">terminal contract</a> ·
+  <a href="CHANGELOG.md">changelog</a> ·
   <a href="LICENSE">MIT</a>
 </p>
 
@@ -39,8 +44,8 @@ Three rules, in priority order:
 
 1. **Urgency decides delivery.** `critical` (agent blocked on you, errors)
    always notifies. `normal` (turn complete) notifies **only when you're not
-   looking** — focus-aware on macOS, always in headless jobs. `low` (FYI,
-   lifecycle) is logged, never shown.
+   looking** — focus-aware on macOS and X11, always in headless jobs. `low`
+   (FYI, lifecycle) is logged, never shown.
 2. **The terminal harness owns the pane.** Inside a multiplexer that has its
    own notification UI (herdr, cmux, or your own via an `exec` sink), herald
    hands the event to the muxer and suppresses the system banner — no double
@@ -49,6 +54,12 @@ Three rules, in priority order:
    points always exit 0, every spawned process has a 2-second budget, and a
    broken config falls back to sane defaults with a warning. Fail-open,
    always.
+
+Plus three quality-of-life guards: **burst coalescing** (an identical event
+delivered moments ago is not repeated — subagent fan-outs produce one banner,
+not N), **quiet hours** (everything below critical is log-only inside the
+window), and **tmux awareness** (the terminal-app focus answer lies inside
+tmux, so herald treats focus as unknown and notifies).
 
 Everything herald does or decides not to do is appended to
 `~/.local/state/herald/events.jsonl`, so "why didn't I get notified?" is a
@@ -176,8 +187,18 @@ this same contract with pinned transports. Details:
 Overrides are deliberately flat — no rule engine:
 
 ```toml
-[routing]                 # always | unfocused | never
-turn-complete = "never"
+[routing]
+turn-complete = "never"       # always | unfocused | never, per kind
+burst-window-ms = 2000        # coalesce identical events (0 disables)
+quiet-hours = "23:00-08:00"   # below-critical → log only (wraps midnight)
+
+[sinks.macos_native]
+sounds = { critical = "Sosumi", normal = "" }   # "" = silence
+
+[sinks.osc]                   # opt-in: in-terminal OSC notifications
+enabled = true                # kitty, Ghostty, iTerm2, WezTerm, ...
+protocol = "osc9"             # osc9 | osc777
+exclusive = false             # true = replace the system banner
 ```
 
 ## Commands
@@ -186,9 +207,9 @@ turn-complete = "never"
 |---|---|
 | `herald hook claude\|codex\|gemini` | Agent hook entry points (always exit 0) |
 | `herald emit --source S --kind K --body B` / `--json` | Universal integration contract |
-| `herald doctor [--install-app]` | Full pipeline diagnosis: config, context, presenter authorization, backends, log |
+| `herald doctor [--install-app] [--json]` | Full pipeline diagnosis: config, context, presenter authorization, backends, log |
 | `herald test [--kind K] [--sink S]` | Synthetic event through the real pipeline |
-| `herald log [-n N] [-f] [--raw]` | Inspect / tail the events log |
+| `herald log [-n N] [-f] [--raw] [--stats]` | Inspect, tail or aggregate the events log |
 
 Global flags: `--dry-run` (print the exact delivery plan as JSON, execute
 nothing), `--config PATH`.
@@ -212,10 +233,11 @@ nothing), `--config PATH`.
 
 ## Status
 
-- macOS: complete (focus detection, native presenter, cascade).
-- Linux: compiles, routes, logs; focus detection returns "unknown" (herald
-  errs on the side of notifying) and the native backend is planned as
-  `notify-send` with a 1:1 urgency mapping.
+- macOS: complete — focus detection, native presenter with click-to-activate,
+  cascade for pre-Tahoe Macs.
+- Linux: `notify-send` backend with 1:1 urgency mapping; focus detection on
+  X11 (`WINDOWID` + `xdotool`); Wayland reports unknown (herald notifies
+  rather than risk silence). CI runs the full suite on Linux.
 - Windows: not planned.
 
 ## License

@@ -47,6 +47,9 @@ impl Sink for ExecSink {
 
     fn plan(&self, ev: &Event, _ctx: &Context) -> Vec<Action> {
         let stdin = serde_json::to_string(ev).unwrap_or_else(|_| "{}".into());
-        vec![Action::SpawnStdin { argv: self.cfg.command.clone(), stdin }]
+        vec![Action::SpawnStdin {
+            argv: self.cfg.command.clone(),
+            stdin,
+        }]
     }
 }

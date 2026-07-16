@@ -25,14 +25,12 @@ pub fn run(cli: Cli) -> i32 {
             hook::run(agent, &cfg, cli.dry_run)
         }
         Cmd::Emit(args) => fallible(loaded, |cfg| emit::run(args, cfg, cli.dry_run)),
-        Cmd::Doctor { install_app } => {
-            if install_app {
-                if let Err(err) = doctor::install_app() {
-                    eprintln!("herald: {err:#}");
-                    return 1;
-                }
+        Cmd::Doctor { install_app, json } => {
+            if install_app && let Err(err) = doctor::install_app() {
+                eprintln!("herald: {err:#}");
+                return 1;
             }
-            doctor::run(cli.config.as_deref())
+            doctor::run(cli.config.as_deref(), json)
         }
         Cmd::Test(args) => fallible(loaded, |cfg| test_cmd::run(args, cfg, cli.dry_run)),
         Cmd::Log(args) => match log_cmd::run(args) {
