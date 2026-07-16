@@ -99,14 +99,21 @@ the first file in `Contents/MacOS`, so any conforming bundle works.
 ## Install
 
 ```sh
-git clone https://github.com/adonay1991/herald && cd herald
-cargo install --path .
+# Homebrew (macOS)
+brew tap adonay1991/tap && brew install herald
 
+# or with cargo
+cargo install --git https://github.com/adonay1991/herald
+
+# then
 herald doctor                 # is the pipeline healthy? what context am I in?
 herald doctor --install-app   # macOS: build the native presenter (see caveat above)
 herald test                   # synthetic event through the real pipeline
 herald test --dry-run         # ...or just print what WOULD happen
 ```
+
+Prebuilt macOS arm64 binaries are attached to
+[releases](https://github.com/adonay1991/herald/releases).
 
 Requirements: Rust 1.94+. macOS fully supported; Linux compiles and routes
 (focus detection and a notify-send backend are stubs for now — see Status).
